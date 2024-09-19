@@ -63,7 +63,7 @@ func (h *Handler) RegisterCloudNodeAccountHandler(w http.ResponseWriter, r *http
 			"version":        req.Version,
 			"node_type":      req.CloudProvider,
 		}
-		err = model.UpsertCloudAccount(ctx, orgAccountNode, req.IsOrganizationDeployment, req.HostNodeID)
+		err = model.UpsertCloudAccount(ctx, orgAccountNode, req.IsOrganizationDeployment, req.HostNodeID, req.ScheduleRefresh)
 		if err != nil {
 			h.complianceError(w, err.Error())
 			return
@@ -86,7 +86,7 @@ func (h *Handler) RegisterCloudNodeAccountHandler(w http.ResponseWriter, r *http
 				"node_type":       req.CloudProvider,
 			}
 		}
-		err = model.UpsertChildCloudAccounts(ctx, monitoredNodes, orgNodeID, req.HostNodeID)
+		err = model.UpsertChildCloudAccounts(ctx, monitoredNodes, orgNodeID, req.HostNodeID, req.ScheduleRefresh)
 		if err != nil {
 			log.Error().Msgf("Error while upserting node: %+v", err)
 			h.complianceError(w, err.Error())
@@ -103,7 +103,7 @@ func (h *Handler) RegisterCloudNodeAccountHandler(w http.ResponseWriter, r *http
 			"node_type":      req.CloudProvider,
 		}
 		log.Debug().Msgf("Node for upsert: %+v", node)
-		err = model.UpsertCloudAccount(ctx, node, req.IsOrganizationDeployment, req.HostNodeID)
+		err = model.UpsertCloudAccount(ctx, node, req.IsOrganizationDeployment, req.HostNodeID, req.ScheduleRefresh)
 		if err != nil {
 			log.Error().Msgf("Error while upserting node: %+v", err)
 			h.complianceError(w, err.Error())

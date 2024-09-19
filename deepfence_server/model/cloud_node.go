@@ -56,6 +56,7 @@ type CloudNodeAccountRegisterReq struct {
 	MonitoredAccounts        []CloudNodeMonitoredAccount `json:"monitored_accounts"`
 	OrganizationAccountID    string                      `json:"organization_account_id"`
 	Version                  string                      `json:"version" validate:"required" required:"true"`
+	ScheduleRefresh          bool                        `json:"schedule_refresh"`
 }
 
 type CloudNodeAccountsListReq struct {
@@ -84,6 +85,7 @@ type CloudNodeAccountInfo struct {
 	LastScanID           string           `json:"last_scan_id"`
 	LastScanStatus       string           `json:"last_scan_status"`
 	RefreshMessage       string           `json:"refresh_message"`
+	RefreshMetadata      string           `json:"refresh_metadata"`
 	RefreshStatus        string           `json:"refresh_status"`
 	RefreshStatusMap     map[string]int64 `json:"refresh_status_map"`
 	ScanStatusMap        map[string]int64 `json:"scan_status_map"`
@@ -207,7 +209,7 @@ type PostureProvider struct {
 	ResourceCount        int64   `json:"resource_count"`
 }
 
-func UpsertCloudAccount(ctx context.Context, nodeDetails map[string]interface{}, isOrganizationDeployment bool, hostNodeID string) error {
+func UpsertCloudAccount(ctx context.Context, nodeDetails map[string]interface{}, isOrganizationDeployment bool, hostNodeID string, scheduleRefresh bool) error {
 
 	ctx, span := telemetry.NewSpan(ctx, "model", "upsert-cloud-compliance-node")
 	defer span.End()
@@ -227,19 +229,22 @@ func UpsertCloudAccount(ctx context.Context, nodeDetails map[string]interface{},
 	defer tx.Close(ctx)
 
 	var setRefreshStatusQuery string
+	var scheduleRefreshStatusQuery string
 	// Organization account node does not have refresh status. It is rather an aggregation of all child account statuses.
 	if !isOrganizationDeployment {
-		setRefreshStatusQuery = `ON CREATE SET n.refresh_status = '` + utils.ScanStatusStarting + `', n.refresh_message = ''`
+		setRefreshStatusQuery = `ON CREATE SET n.refresh_status = '` + utils.ScanStatusStarting + `', n.refresh_message = '', n.refresh_metadata = ''`
+		if scheduleRefresh {
+			scheduleRefreshStatusQuery = `, n.refresh_status = '` + utils.ScanStatusStarting + `'`
+		}
 	}
-
 	if _, err = tx.Run(ctx, `
 		MERGE (r:Node{node_id:$host_node_id, node_type: "cloud_agent"})
 		WITH $param as row, r
 		MERGE (n:CloudNode{node_id:row.node_id})
 		`+setRefreshStatusQuery+`
 		MERGE (r) -[:HOSTS]-> (n)
-		SET n+= row, n.active = true, n.updated_at = TIMESTAMP(), n.version = row.version,
-		r.node_name=$host_node_id, r.active = true, r.agent_running=true, r.updated_at = TIMESTAMP()`,
+		SET n+= row, n.active = true, n.updated_at = TIMESTAMP(), n.version = row.version, r.node_name = $host_node_id, 
+	    r.active = true, r.agent_running = true, r.updated_at = TIMESTAMP()`+scheduleRefreshStatusQuery,
 		map[string]interface{}{
 			"param":        nodeDetails,
 			"host_node_id": hostNodeID,
@@ -250,7 +255,7 @@ func UpsertCloudAccount(ctx context.Context, nodeDetails map[string]interface{},
 	return tx.Commit(ctx)
 }
 
-func UpsertChildCloudAccounts(ctx context.Context, nodeDetails []map[string]interface{}, parentNodeID string, hostNodeID string) error {
+func UpsertChildCloudAccounts(ctx context.Context, nodeDetails []map[string]interface{}, parentNodeID string, hostNodeID string, scheduleRefresh bool) error {
 	ctx, span := telemetry.NewSpan(ctx, "model", "upsert-cloud-compliance-node")
 	defer span.End()
 
@@ -268,17 +273,21 @@ func UpsertChildCloudAccounts(ctx context.Context, nodeDetails []map[string]inte
 	}
 	defer tx.Close(ctx)
 
+	var scheduleRefreshStatusQuery string
+	if scheduleRefresh {
+		scheduleRefreshStatusQuery = `, n.refresh_status = '` + utils.ScanStatusStarting + `'`
+	}
 	if _, err = tx.Run(ctx, `
 			MERGE (r:Node{node_id:$host_node_id, node_type: "cloud_agent"})
 			MERGE (m:CloudNode{node_id: $parent_node_id})
 			WITH r, m
 			UNWIND $param as row
 			MERGE (n:CloudNode{node_id:row.node_id})
-			ON CREATE SET n.refresh_status = '`+utils.ScanStatusStarting+`', n.refresh_message = ''
+			ON CREATE SET n.refresh_status = '`+utils.ScanStatusStarting+`', n.refresh_message = '', n.refresh_metadata = ''
 			MERGE (m) -[:IS_CHILD]-> (n)
 			MERGE (r) -[:HOSTS]-> (n)
-			SET n+= row, n.active = true, n.updated_at = TIMESTAMP(), n.version = row.version, 
-			r.active = true, r.agent_running=true, r.updated_at = TIMESTAMP()`,
+			SET n+= row, n.active = true, n.updated_at = TIMESTAMP(), n.version = row.version, r.active = true, 
+			r.agent_running=true, r.updated_at = TIMESTAMP()`+scheduleRefreshStatusQuery,
 		map[string]interface{}{
 			"param":          nodeDetails,
 			"parent_node_id": parentNodeID,
@@ -560,7 +569,7 @@ func (c *CloudAccountRefreshReq) SetCloudAccountRefresh(ctx context.Context) err
 	if _, err = tx.Run(ctx, `
 		UNWIND $batch as cloudNode
 		MATCH (m:CloudNode{node_id: cloudNode})
-		SET m.refresh_status = '`+utils.ScanStatusStarting+`', m.refresh_message = ''`,
+		SET m.refresh_status = '`+utils.ScanStatusStarting+`', m.refresh_message = '', m.refresh_metadata = ''`,
 		map[string]interface{}{
 			"batch": c.NodeIDs,
 		}); err != nil {
